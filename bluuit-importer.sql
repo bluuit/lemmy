@@ -12,9 +12,8 @@
 create 
 or replace table submissions(
   title text, permalink text, url text, 
-  author text, author_created_utc bigint, created_utc bigint, 
-  id text, over_18 boolean, 
-  retrieved_on bigint, subreddit_name_prefixed text
+  author text, created_utc bigint, 
+  id text, over_18 boolean, subreddit_name_prefixed text
 );
 insert into submissions 
 select 
@@ -22,20 +21,17 @@ select
   permalink, 
   url, 
   author, 
-  author_created_utc, 
   created_utc, 
   id, 
   over_18, 
-  retrieved_on, 
   subreddit_name_prefixed 
 from 
   reddit, 
   jsonb_to_record(json) as z(
     title text, permalink text, url text, 
-    author text, author_created_utc bigint, 
+    author text, 
     created_utc bigint, 
-    id text, name text, over_18 boolean, 
-    retrieved_on bigint, subreddit_name_prefixed text
+    id text, name text, over_18 boolean, subreddit_name_prefixed text
   );
 
 /* 

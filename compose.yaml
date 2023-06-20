@@ -1,0 +1,56 @@
+services:
+  lemmy:
+    image: dessalines/lemmy:0.17.4
+    restart: always
+    environment:
+      - RUST_LOG="warn,lemmy_server=debug,lemmy_api=debug,lemmy_api_common=debug,lemmy_api_crud=debug,lemmy_apub=debug,lemmy_db_schema=debug,lemmy_db_views=debug,lemmy_db_views_actor=debug,lemmy_db_views_moderator=debug,lemmy_routes=debug,lemmy_utils=debug,lemmy_websocket=debug"
+      - RUST_BACKTRACE=full
+    volumes:
+      - ./lemmy.hjson:/config/config.hjson:Z
+
+  lemmy-ui:
+    image: dessalines/lemmy-ui:0.17.4
+    environment:
+      # this needs to match the hostname defined in the lemmy service
+      - LEMMY_UI_LEMMY_INTERNAL_HOST=lemmy:8536
+      # set the outside hostname here
+      - LEMMY_UI_LEMMY_EXTERNAL_HOST=localhost:1236
+      - LEMMY_HTTPS=false
+      - LEMMY_UI_DEBUG=true
+    depends_on:
+      - lemmy
+    restart: always
+    ports:
+      - 1236:1234
+
+  postgres:
+    image: postgres:15-alpine
+    # this needs to match the database host in lemmy.hson
+    # Tune your settings via
+    # https://pgtune.leopard.in.ua/#/
+    # You can use this technique to add them here
+    # https://stackoverflow.com/a/30850095/1655478
+    hostname: lemmy
+    command:
+      [
+        "postgres",
+        "-c",
+        "session_preload_libraries=auto_explain",
+        "-c",
+        "auto_explain.log_min_duration=5ms",
+        "-c",
+        "auto_explain.log_analyze=true",
+        "-c",
+        "track_activity_query_size=1048576",
+      ]
+    ports:
+      # use a different port so it doesnt conflict with potential postgres db running on the host
+      - "5433:5432"
+    environment:
+      - POSTGRES_USER=lemmy
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=lemmy
+    volumes:
+      - ./volumes/postgres:/var/lib/postgresql/data:Z
+      - ./customPostgresql.conf:/etc/postgresql.conf:Z
+    restart: always
