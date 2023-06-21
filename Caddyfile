@@ -1,0 +1,20 @@
+{
+	auto_https off
+}
+
+http://localhost:1236 {
+	@lemmy {
+		path /api/*
+		path /feeds/*
+		path /nodeinfo/*
+		path /.well-known/*
+	}
+
+	handle @lemmy {
+		reverse_proxy http://lemmy:8536
+	}
+
+	handle /* {
+		reverse_proxy http://lemmy-ui:1234
+	}
+}

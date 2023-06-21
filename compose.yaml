@@ -1,15 +1,42 @@
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "50m"
+    max-file: 4
+
 services:
+  proxy:
+    image: caddy:2.6.4-alpine
+    ports:
+      # actual and only port facing any connection from outside
+      # Note, change the left number if port 1236 is already in use on your system
+      # You could use port 80 if you won't use a reverse proxy
+      - "1236:1236"
+      - "8536:8536"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+    restart: always
+    depends_on:
+      - lemmy-ui
+    logging: *default-logging
+
   lemmy:
-    image: dessalines/lemmy:0.17.4
+    image: dessalines/lemmy:latest
     restart: always
     environment:
       - RUST_LOG="warn,lemmy_server=debug,lemmy_api=debug,lemmy_api_common=debug,lemmy_api_crud=debug,lemmy_apub=debug,lemmy_db_schema=debug,lemmy_db_views=debug,lemmy_db_views_actor=debug,lemmy_db_views_moderator=debug,lemmy_routes=debug,lemmy_utils=debug,lemmy_websocket=debug"
       - RUST_BACKTRACE=full
+      # make sure to include the port number, as a different port === different origin
+      - LEMMY_CORS_ORIGIN=http://localhost:1236
     volumes:
       - ./lemmy.hjson:/config/config.hjson:Z
+    hostname: lemmy
+    depends_on:
+      - postgres
+    logging: *default-logging
 
   lemmy-ui:
-    image: dessalines/lemmy-ui:0.17.4
+    image: dessalines/lemmy-ui:latest
     environment:
       # this needs to match the hostname defined in the lemmy service
       - LEMMY_UI_LEMMY_INTERNAL_HOST=lemmy:8536
@@ -20,17 +47,16 @@ services:
     depends_on:
       - lemmy
     restart: always
-    ports:
-      - 1236:1234
+    logging: *default-logging
 
   postgres:
-    image: postgres:15-alpine
+    image: postgres:15.3-alpine
     # this needs to match the database host in lemmy.hson
     # Tune your settings via
     # https://pgtune.leopard.in.ua/#/
     # You can use this technique to add them here
     # https://stackoverflow.com/a/30850095/1655478
-    hostname: lemmy
+    hostname: postgres
     command:
       [
         "postgres",
@@ -52,5 +78,5 @@ services:
       - POSTGRES_DB=lemmy
     volumes:
       - ./volumes/postgres:/var/lib/postgresql/data:Z
-      - ./customPostgresql.conf:/etc/postgresql.conf:Z
     restart: always
+    logging: *default-logging
