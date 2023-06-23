@@ -1,26 +1,24 @@
+#!/usr/bin/env node
+
+import { program } from 'commander';
 import { LemmyHttp } from 'lemmy-js-client';
-import { pipeline } from 'node:stream/promises';
-import fs, { read } from 'node:fs';
+import fs from 'node:fs';
+import { readFile as fsReadFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import process from 'node:process';
 import { z } from 'zod';
-import dotenv from 'dotenv';
-import { cleanEnv, str } from 'envalid';
-import { Result } from 'neverthrow';
+import readFn from 'read';
+import { Result, ResultAsync, ok, err } from 'neverthrow';
 
-const safeParseJson = Result.fromThrowable(
-  JSON.parse,
-  () => new Error('Failed to parse JSON')
-);
+const read = (o) => ResultAsync.fromPromise(readFn(o), (e) => e);
 
-dotenv.config();
+const createLemmyClient = Result.fromThrowable((u) => new LemmyHttp(u));
 
-const env = cleanEnv(process.env, {
-  LEMMY_USERNAME_OR_EMAIL: str(),
-  LEMMY_PASSWORD: str(),
-  BLUUIT_INPUT_PATH: str(),
-});
+const pathExists = (o) => ResultAsync.fromPromise(stat(o), (e) => e);
+
+const createReadStream = (o) =>
+  pathExists(o).andThen(() => ok(fs.createReadStream(o)));
 
 const submissionSchema = z.object({
   title: z.string(),
@@ -33,53 +31,91 @@ const submissionSchema = z.object({
   subreddit_name_prefixed: z.string(),
 });
 
-const reader = fs.createReadStream(env.BLUUIT_INPUT_PATH);
+const safeParseJson = Result.fromThrowable(JSON.parse);
 
-const lines = createInterface({
-  input: reader,
-  crlfDelay: Infinity,
-});
+const safeParseSubmission = Result.fromThrowable(submissionSchema.parse);
 
-for await (const line of lines) {
-  const jsonResult = safeParseJson(line);
-  if (jsonResult.isOk()) {
-    const schemaResult = submissionSchema.safeParse(jsonResult.value);
-    if (schemaResult.success) {
-      console.log('line', schemaResult.data);
-    } else {
-      console.error(schemaResult.error);
-    }
-  } else {
-    console.error(jsonResult.error);
-  }
+program
+  .name('bluuit-lemmy-importer')
+  .version('1.0.0')
+  .description('imports bluuit data into a lemmy instance')
+  .requiredOption('-i, --input <path>', 'path to input file')
+  .requiredOption('-u, --user <user>', 'username or email of lemmy admin')
+  .requiredOption('-l, --lemmy <url>', 'url of lemmy instance')
+  .parse();
+
+const options = program.opts();
+
+const setupResult = await createReadStream(options.input)
+  .andThen((input) =>
+    ok({
+      input,
+      lines: createInterface({
+        input,
+        crlfDelay: Infinity,
+      }),
+    })
+  )
+  .andThen(({ input, lines }) =>
+    read({
+      prompt: `Password for ${options.user}: `,
+      silent: true,
+      timeout: 60000,
+    })
+      .andThen((password) => {
+        // needed to add newline after password prompt
+        console.log();
+
+        return createLemmyClient(options.lemmy).asyncAndThen(
+          async (lemmyClient) => {
+            const login = (o) =>
+              ResultAsync.fromPromise(lemmyClient.login(o), (e) => e);
+
+            const loginResult = await login({
+              username_or_email: options.user,
+              password,
+            });
+
+            if (loginResult.isOk()) {
+              if (loginResult.value.jwt) {
+                return ok({
+                  input,
+                  lines,
+                  lemmyClient,
+                  jwt: loginResult.value.jwt,
+                });
+              }
+
+              return err(
+                new Error(
+                  'Credentials are valid but login response did not return JWT'
+                )
+              );
+            }
+
+            return err(loginResult.error);
+          }
+        );
+      })
+      .orElse((e) => {
+        console.error('Closing file stream due to lemmy authentication error');
+        input.close();
+        lines.close();
+        return err(e);
+      })
+  );
+
+if (setupResult.isOk()) {
+  const { input, lines, lemmyClient, jwt } = setupResult.value;
+
+  process.on('SIGINT', () => {
+    input.close();
+    lines.close();
+    process.exitCode = 1;
+  });
+
+  console.log(jwt);
+} else {
+  console.error(setupResult.error);
+  process.exitCode = 1;
 }
-
-process.on('SIGINT', () => {
-  reader.close();
-  lines.close();
-  exit(1);
-});
-
-reader.close();
-lines.close();
-
-// const client = new LemmyHttp('http://localhost:1236');
-
-// const login = await client.login({
-//   username_or_email: 'admin',
-//   password: 'tf6HHDS4RolWfFhk4Rq9',
-// });
-
-// const communitiesResponse = await client.listCommunities({});
-
-// client.register({});
-
-// const first = communitiesResponse.communities[0];
-
-// if (login.jwt) {
-//   client.createPost({
-//     name: 'something',
-//     community_id: first.community.id,
-//     auth: login.jwt,
-//   });
-// }

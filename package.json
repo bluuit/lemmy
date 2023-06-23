@@ -11,10 +11,10 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "dotenv": "^16.3.1",
-    "envalid": "^7.3.1",
+    "commander": "^11.0.0",
     "lemmy-js-client": "0.18.0-rc.2",
     "neverthrow": "^6.0.0",
+    "read": "^2.1.0",
     "zod": "^3.21.4"
   }
 }
