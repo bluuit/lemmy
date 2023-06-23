@@ -23,7 +23,14 @@ const createReadStream = (o) =>
 const submissionSchema = z.object({
   title: z.string(),
   permalink: z.string(),
-  url: z.string(),
+  url: z.string().transform((u) => {
+    // lemmy createPost() throws an error if url is an empty string
+    if (u === '') {
+      return undefined;
+    }
+
+    return u;
+  }),
   author: z.string(),
   created_utc: z.number(),
   id: z.string(),
@@ -46,67 +53,63 @@ program
 
 const options = program.opts();
 
-const setupResult = await createReadStream(options.input)
-  .andThen((input) =>
-    ok({
-      input,
-      lines: createInterface({
-        input,
-        crlfDelay: Infinity,
-      }),
-    })
-  )
-  .andThen(({ input, lines }) =>
-    read({
-      prompt: `Password for ${options.user}: `,
-      silent: true,
-      timeout: 60000,
-    })
-      .andThen((password) => {
-        // needed to add newline after password prompt
-        console.log();
+const setupResult = await createReadStream(options.input).andThen((input) =>
+  read({
+    prompt: `Password for ${options.user}: `,
+    silent: true,
+    timeout: 60000,
+  })
+    .andThen((password) => {
+      // needed to add newline after password prompt
+      console.log();
 
-        return createLemmyClient(options.lemmy).asyncAndThen(
-          async (lemmyClient) => {
-            const login = (o) =>
-              ResultAsync.fromPromise(lemmyClient.login(o), (e) => e);
+      return createLemmyClient(options.lemmy).asyncAndThen(
+        async (lemmyClient) => {
+          const login = (o) =>
+            ResultAsync.fromPromise(lemmyClient.login(o), (e) => e);
 
-            const loginResult = await login({
-              username_or_email: options.user,
-              password,
-            });
+          const loginResult = await login({
+            username_or_email: options.user,
+            password,
+          });
 
-            if (loginResult.isOk()) {
-              if (loginResult.value.jwt) {
-                return ok({
-                  input,
-                  lines,
-                  lemmyClient,
-                  jwt: loginResult.value.jwt,
-                });
-              }
-
-              return err(
-                new Error(
-                  'Credentials are valid but login response did not return JWT'
-                )
-              );
+          if (loginResult.isOk()) {
+            if (loginResult.value.jwt) {
+              return ok({
+                input,
+                lemmyClient,
+                jwt: loginResult.value.jwt,
+              });
             }
 
-            return err(loginResult.error);
+            return err(
+              new Error(
+                'Credentials are valid but login response did not return JWT'
+              )
+            );
           }
-        );
-      })
-      .orElse((e) => {
-        console.error('Closing file stream due to lemmy authentication error');
-        input.close();
-        lines.close();
-        return err(e);
-      })
-  );
+
+          return err(loginResult.error);
+        }
+      );
+    })
+    .orElse((e) => {
+      console.error('Closing file stream due to lemmy authentication error');
+      input.close();
+      return err(e);
+    })
+);
 
 if (setupResult.isOk()) {
-  const { input, lines, lemmyClient, jwt } = setupResult.value;
+  const { input, lemmyClient, jwt } = setupResult.value;
+
+  const createPost = (o) =>
+    ResultAsync.fromPromise(lemmyClient.createPost(o), (e) => e);
+
+  const lines = createInterface({
+    input,
+    crlfDelay: Infinity,
+  });
 
   process.on('SIGINT', () => {
     input.close();
@@ -114,7 +117,48 @@ if (setupResult.isOk()) {
     process.exitCode = 1;
   });
 
-  console.log(jwt);
+  for await (const line of lines) {
+    safeParseJson(line)
+      .andThen((json) =>
+        safeParseSubmission(json)
+          .asyncAndThen((submission) =>
+            createPost({
+              name: submission.title,
+              community_id: 2,
+              url: submission.url,
+              body: submission.permalink,
+              nsfw: submission.over_18,
+              auth: jwt,
+            }).orElse((e) =>
+              err({
+                data: {
+                  submission,
+                },
+                error: e,
+              })
+            )
+          )
+          .orElse((e) =>
+            err({
+              data: {
+                ...e.data,
+                json,
+              },
+              error: e.error,
+            })
+          )
+      )
+      .orElse((e) => {
+        console.error({
+          data: {
+            ...e.data,
+            line,
+          },
+          error: e.error,
+        });
+        return err(e);
+      });
+  }
 } else {
   console.error(setupResult.error);
   process.exitCode = 1;
